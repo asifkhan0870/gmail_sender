@@ -1,6 +1,8 @@
+
 import base64
 import csv
 import hashlib
+import os
 import re
 import time
 from datetime import datetime
@@ -10,12 +12,18 @@ from threading import Lock
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 BASE_DIR = Path(__file__).resolve().parent
-CREDENTIALS_FILE = Path("/etc/secrets/credentials.json")
+CREDENTIALS_FILE = Path(
+    os.getenv("MAILDESK_CREDENTIALS_FILE", "/etc/secrets/credentials.json")
+)
+REDIRECT_URI = os.getenv(
+    "MAILDESK_REDIRECT_URI",
+    "https://gmail-sender-01.onrender.com/oauth/callback",
+)
 TOKENS_DIR = BASE_DIR / "tokens"
 LOG_FILE = BASE_DIR / "send_log.csv"
 SUPPRESSED_FILE = BASE_DIR / "suppressed.txt"
@@ -82,9 +90,7 @@ def log_result(email, status, detail=""):
     with LOG_FILE.open(
         "a", newline="", encoding="utf-8"
     ) as file:
-        writer = csv.DictWriter(
-            file, fieldnames=LOG_FIELDS
-        )
+        writer = csv.DictWriter(file, fieldnames=LOG_FIELDS)
 
         if not exists:
             writer.writeheader()
@@ -110,9 +116,7 @@ def validate_recipients(rows):
     )
 
     if not email_column:
-        raise ValueError(
-            "CSV must contain an 'email' column."
-        )
+        raise ValueError("CSV must contain an 'email' column.")
 
     seen = set()
     valid = []
@@ -122,9 +126,7 @@ def validate_recipients(rows):
     blocked = load_suppressed()
 
     for row in rows:
-        email = (
-            row.get(email_column) or ""
-        ).strip().lower()
+        email = (row.get(email_column) or "").strip().lower()
 
         if not EMAIL_PATTERN.fullmatch(email):
             invalid += 1
@@ -158,58 +160,61 @@ def get_gmail_profile(creds):
         cache_discovery=False,
     )
 
-    profile = service.users().getProfile(
-        userId="me"
-    ).execute()
-
+    profile = service.users().getProfile(userId="me").execute()
     return service, profile.get("emailAddress", "")
 
 
-def connect_gmail_account():
-    """Open Google OAuth and save credentials for the selected account."""
-
+def _oauth_flow(state=None):
+    """Build a Google Web OAuth flow for the hosted Render app."""
     if not CREDENTIALS_FILE.exists():
         raise FileNotFoundError(
-            "credentials.json must be beside sender.py."
+            f"OAuth credentials file not found at {CREDENTIALS_FILE}. "
+            "Check Render Secret Files and MAILDESK_CREDENTIALS_FILE."
         )
 
-    flow = InstalledAppFlow.from_client_secrets_file(
+    return Flow.from_client_secrets_file(
         str(CREDENTIALS_FILE),
-        SCOPES,
+        scopes=SCOPES,
+        state=state,
+        redirect_uri=REDIRECT_URI,
     )
 
-    creds = flow.run_local_server(
-        port=0,
-        authorization_prompt_message=(
-            "Open this URL to authorize Gmail: {url}"
-        ),
-        success_message=(
-            "Gmail authorization completed. "
-            "You can close this window."
-        ),
-        open_browser=True,
+
+def begin_gmail_oauth():
+    """Return an authorization URL and state for browser-based OAuth."""
+    flow = _oauth_flow()
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
         prompt="select_account consent",
     )
+    return authorization_url, state
+
+
+def complete_gmail_oauth(code, state):
+    """Exchange the callback code and save the verified Gmail token.
+
+    The web route must validate state against the state returned by
+    begin_gmail_oauth() before calling this function.
+    """
+    if not code or not state:
+        raise ValueError("Google OAuth callback is missing code or state.")
+
+    flow = _oauth_flow(state=state)
+    flow.fetch_token(code=code)
+    creds = flow.credentials
 
     _, actual_email = get_gmail_profile(creds)
-
     if not actual_email:
-        raise RuntimeError(
-            "Google did not return a Gmail account address."
-        )
+        raise RuntimeError("Google did not return a Gmail account address.")
 
     token_file = token_path_for_email(actual_email)
-    token_file.write_text(
-        creds.to_json(),
-        encoding="utf-8",
-    )
-
+    token_file.write_text(creds.to_json(), encoding="utf-8")
     return actual_email
 
 
 def get_gmail_service(account_email):
     """Load the token belonging to the selected Gmail account."""
-
     if not account_email:
         raise ValueError("Select a Gmail account first.")
 
@@ -221,18 +226,12 @@ def get_gmail_service(account_email):
             "Click Connect Gmail and authorize it first."
         )
 
-    creds = Credentials.from_authorized_user_file(
-        str(token_file),
-        SCOPES,
-    )
+    creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
 
     if not creds.valid:
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            token_file.write_text(
-                creds.to_json(),
-                encoding="utf-8",
-            )
+            token_file.write_text(creds.to_json(), encoding="utf-8")
         else:
             raise RuntimeError(
                 f"Authorization for {account_email} has expired. "
@@ -243,37 +242,30 @@ def get_gmail_service(account_email):
 
     if actual_email.lower() != account_email.strip().lower():
         raise RuntimeError(
-            "The authorized Gmail account does not match "
-            "the selected account."
+            "The authorized Gmail account does not match the selected account."
         )
 
     return service, actual_email
 
 
 def connected_accounts():
-    """Return the Google accounts that have saved token files."""
-
+    """Return Google accounts with saved token files."""
     accounts = []
 
     for token_file in TOKENS_DIR.glob("*.json"):
         try:
             creds = Credentials.from_authorized_user_file(
-                str(token_file),
-                SCOPES,
+                str(token_file), SCOPES
             )
 
             if not creds.valid:
                 if creds.expired and creds.refresh_token:
                     creds.refresh(Request())
-                    token_file.write_text(
-                        creds.to_json(),
-                        encoding="utf-8",
-                    )
+                    token_file.write_text(creds.to_json(), encoding="utf-8")
                 else:
                     continue
 
             _, email = get_gmail_profile(creds)
-
             if email:
                 accounts.append(email)
 
@@ -285,13 +277,8 @@ def connected_accounts():
 
 def current_account():
     """Compatibility helper for the dashboard."""
-
     accounts = connected_accounts()
-
-    if len(accounts) == 1:
-        return accounts[0]
-
-    return ""
+    return accounts[0] if len(accounts) == 1 else ""
 
 
 def send_one(service, recipient, subject, body):
@@ -300,9 +287,7 @@ def send_one(service, recipient, subject, body):
     message["Subject"] = subject.strip()
     message.set_content(body.strip())
 
-    raw = base64.urlsafe_b64encode(
-        message.as_bytes()
-    ).decode("ascii")
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
 
     result = service.users().messages().send(
         userId="me",
@@ -317,23 +302,14 @@ def current_stats():
     today = datetime.now().astimezone().date().isoformat()
 
     return {
-        "sent_total": sum(
-            row.get("status") == "SENT"
-            for row in rows
-        ),
+        "sent_total": sum(row.get("status") == "SENT" for row in rows),
         "sent_today": sum(
             row.get("status") == "SENT"
             and row.get("timestamp", "").startswith(today)
             for row in rows
         ),
-        "failed_total": sum(
-            row.get("status") == "ERROR"
-            for row in rows
-        ),
-        "unknown_total": sum(
-            row.get("status") == "UNKNOWN"
-            for row in rows
-        ),
+        "failed_total": sum(row.get("status") == "ERROR" for row in rows),
+        "unknown_total": sum(row.get("status") == "UNKNOWN" for row in rows),
         "recent": list(reversed(rows[-30:])),
         "daily_cap": MAX_PER_DAY,
     }
@@ -347,33 +323,21 @@ def send_batch(
     delay_seconds=PAUSE_SECONDS,
 ):
     if not subject.strip() or not body.strip():
-        raise ValueError(
-            "Subject and message body are required."
-        )
+        raise ValueError("Subject and message body are required.")
 
     if not 5 <= delay_seconds <= 120:
-        raise ValueError(
-            "Pause must be between 5 and 120 seconds."
-        )
+        raise ValueError("Pause must be between 5 and 120 seconds.")
 
     if not SEND_LOCK.acquire(blocking=False):
-        raise RuntimeError(
-            "Another send job is already running."
-        )
+        raise RuntimeError("Another send job is already running.")
 
     try:
-        # Always authenticate with the selected account's token.
-        service, actual_sender = get_gmail_service(
-            confirmed_sender
-        )
+        service, actual_sender = get_gmail_service(confirmed_sender)
 
         if actual_sender.lower() != confirmed_sender.lower():
-            raise RuntimeError(
-                f"Selected account mismatch: {actual_sender}"
-            )
+            raise RuntimeError(f"Selected account mismatch: {actual_sender}")
 
         log_rows = read_log()
-
         processed = {
             row.get("email", "").strip().lower()
             for row in log_rows
@@ -381,7 +345,6 @@ def send_batch(
         }
 
         today = datetime.now().astimezone().date().isoformat()
-
         sent_today = sum(
             row.get("status") == "SENT"
             and row.get("timestamp", "").startswith(today)
@@ -389,19 +352,15 @@ def send_batch(
         )
 
         if sent_today >= MAX_PER_DAY:
-            raise RuntimeError(
-                "The local daily safety cap has been reached."
-            )
+            raise RuntimeError("The local daily safety cap has been reached.")
 
         blocked = load_suppressed()
-
         pending = [
             email.strip().lower()
             for email in recipients
             if email.strip().lower() not in processed
             and email.strip().lower() not in blocked
         ]
-
         pending = pending[:MAX_PER_DAY - sent_today]
 
         sent = 0
@@ -409,59 +368,27 @@ def send_batch(
         skipped = 0
         events = []
 
-        for index, recipient in enumerate(
-            pending, start=1
-        ):
+        for index, recipient in enumerate(pending, start=1):
             if recipient in load_suppressed():
-                log_result(
-                    recipient,
-                    "SKIPPED",
-                    "Address is on suppression list",
-                )
+                log_result(recipient, "SKIPPED", "Address is on suppression list")
                 skipped += 1
                 continue
 
             try:
-                message_id = send_one(
-                    service,
-                    recipient,
-                    subject,
-                    body,
-                )
+                message_id = send_one(service, recipient, subject, body)
 
                 if not message_id:
-                    log_result(
-                        recipient,
-                        "UNKNOWN",
-                        "No message ID returned",
-                    )
-                    events.append({
-                        "email": recipient,
-                        "status": "UNKNOWN",
-                    })
+                    log_result(recipient, "UNKNOWN", "No message ID returned")
+                    events.append({"email": recipient, "status": "UNKNOWN"})
                     break
 
-                log_result(
-                    recipient,
-                    "SENT",
-                    f"gmail_message_id={message_id}",
-                )
-
+                log_result(recipient, "SENT", f"gmail_message_id={message_id}")
                 sent += 1
-                events.append({
-                    "email": recipient,
-                    "status": "SENT",
-                })
+                events.append({"email": recipient, "status": "SENT"})
 
             except HttpError as exc:
                 code = getattr(exc.resp, "status", None)
-
-                log_result(
-                    recipient,
-                    "ERROR",
-                    f"HTTP {code}: {exc}",
-                )
-
+                log_result(recipient, "ERROR", f"HTTP {code}: {exc}")
                 errors += 1
                 events.append({
                     "email": recipient,
@@ -473,16 +400,8 @@ def send_batch(
                     break
 
             except Exception as exc:
-                log_result(
-                    recipient,
-                    "UNKNOWN",
-                    repr(exc),
-                )
-
-                events.append({
-                    "email": recipient,
-                    "status": "UNKNOWN",
-                })
+                log_result(recipient, "UNKNOWN", repr(exc))
+                events.append({"email": recipient, "status": "UNKNOWN"})
                 break
 
             if index < len(pending):

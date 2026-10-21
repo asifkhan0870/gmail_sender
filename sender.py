@@ -15,7 +15,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 BASE_DIR = Path(__file__).resolve().parent
-CREDENTIALS_FILE = BASE_DIR / "credentials.json"
+CREDENTIALS_FILE = Path("/etc/secrets/credentials.json")
 TOKENS_DIR = BASE_DIR / "tokens"
 LOG_FILE = BASE_DIR / "send_log.csv"
 SUPPRESSED_FILE = BASE_DIR / "suppressed.txt"

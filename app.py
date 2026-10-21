@@ -7,7 +7,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
-
+from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
     FastAPI,
@@ -21,15 +21,15 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
-from dotenv import load_dotenv
 
 import sender
 
-BASE_DIR = sender.BASE_DIR
-
 load_dotenv()
 
+BASE_DIR = sender.BASE_DIR
+
 app = FastAPI(title="MailDesk")
+
 app.mount(
     "/static",
     StaticFiles(directory=str(BASE_DIR / "static")),
@@ -73,6 +73,11 @@ def require_key(key: str | None):
         )
 
 
+def get_request_key(request: Request, access_key: str = ""):
+    header_key = request.headers.get("X-Dashboard-Key", "")
+    return access_key or header_key
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (
@@ -80,14 +85,9 @@ def index():
     ).read_text(encoding="utf-8")
 
 
-
 @app.get("/api/status")
-def status(
-    access_key: str = "",
-    request: Request = None,
-):
-    header_key = request.headers.get("X-Dashboard-Key", "") if request else ""
-    require_key(access_key or header_key)
+def status(request: Request, access_key: str = ""):
+    require_key(get_request_key(request, access_key))
 
     return {
         "send_enabled": WEB_SEND_ENABLED,
@@ -97,30 +97,36 @@ def status(
         "stats": sender.current_stats(),
     }
 
+
 @app.post("/api/connect")
 def connect_account(
     request: Request,
     access_key: str = Form(""),
 ):
-    require_key(access_key)
+    require_key(get_request_key(request, access_key))
 
     try:
-        authorization_url, state = sender.begin_gmail_oauth()
+        authorization_url, state, code_verifier = (
+            sender.begin_gmail_oauth()
+        )
 
         request.session["oauth_state"] = state
+        request.session["oauth_code_verifier"] = code_verifier
 
         return JSONResponse({
             "authorization_url": authorization_url,
         })
 
     except Exception as exc:
+        # Keep technical details in server logs, not in public responses.
+        print(f"Could not start Google authorization: {exc}")
         raise HTTPException(
             status_code=400,
-            detail=f"Could not start Google authorization: {exc}",
+            detail="Could not start Google authorization. Check server logs.",
         ) from exc
 
 
-@app.get("/oauth/callback")
+@app.get("/oauth/callback", response_class=HTMLResponse)
 def oauth_callback(
     request: Request,
     code: str = "",
@@ -130,26 +136,41 @@ def oauth_callback(
     if error:
         request.session.clear()
         return HTMLResponse(
-            "<h2>Google authorization was cancelled.</h2>",
+            "<h2>Google authorization was cancelled. "
+            "Return to MailDesk and try again.</h2>",
             status_code=400,
         )
 
     expected_state = request.session.pop("oauth_state", None)
+    code_verifier = request.session.pop("oauth_code_verifier", None)
 
     if not expected_state or not state:
+        request.session.clear()
         raise HTTPException(
             status_code=400,
             detail="OAuth session expired. Return to MailDesk and try again.",
         )
 
     if not secrets.compare_digest(expected_state, state):
+        request.session.clear()
         raise HTTPException(
             status_code=400,
-            detail="OAuth state verification failed.",
+            detail="OAuth state verification failed. Restart the login flow.",
+        )
+
+    if not code_verifier or not code:
+        request.session.clear()
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth verifier or authorization code is missing. Restart login.",
         )
 
     try:
-        email = sender.complete_gmail_oauth(code, state)
+        email = sender.complete_gmail_oauth(
+            code,
+            state,
+            code_verifier,
+        )
         request.session.clear()
 
         return HTMLResponse(
@@ -163,18 +184,23 @@ def oauth_callback(
 
     except Exception as exc:
         request.session.clear()
+        print(f"Google authorization failed: {exc}")
         raise HTTPException(
             status_code=400,
-            detail=f"Google authorization failed: {exc}",
+            detail=(
+                "Google authorization failed. Restart the login flow "
+                "and check server logs if it continues."
+            ),
         ) from exc
 
 
 @app.post("/api/validate")
 async def validate_csv(
+    request: Request,
     file: UploadFile = File(...),
     access_key: str = Form(""),
 ):
-    require_key(access_key)
+    require_key(get_request_key(request, access_key))
 
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(
@@ -199,7 +225,10 @@ async def validate_csv(
         result = sender.validate_recipients(rows)
 
     except (UnicodeDecodeError, csv.Error, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
 
     processed = {
         row.get("email", "").strip().lower()
@@ -240,10 +269,12 @@ class SendRequest(BaseModel):
 
 @app.post("/api/send")
 def start_send(
+    request: Request,
     payload: SendRequest,
     background_tasks: BackgroundTasks,
 ):
-    require_key(payload.access_key)
+    header_key = request.headers.get("X-Dashboard-Key", "")
+    require_key(payload.access_key or header_key)
 
     if not WEB_SEND_ENABLED:
         raise HTTPException(
@@ -270,7 +301,6 @@ def start_send(
     validated = sender.validate_recipients(
         [{"email": item} for item in payload.recipients]
     )
-
     recipients = validated["eligible"]
 
     processed = {
@@ -344,9 +374,10 @@ def run_job(job_id, recipients, payload):
 @app.get("/api/jobs/{job_id}")
 def job_status(
     job_id: str,
+    request: Request,
     access_key: str = "",
 ):
-    require_key(access_key)
+    require_key(get_request_key(request, access_key))
 
     with JOBS_LOCK:
         job = JOBS.get(job_id)
@@ -361,6 +392,6 @@ def job_status(
 
 
 @app.get("/api/logs")
-def logs(access_key: str = ""):
-    require_key(access_key)
+def logs(request: Request, access_key: str = ""):
+    require_key(get_request_key(request, access_key))
     return sender.current_stats()

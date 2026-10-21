@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+.env
+credentials.json
+token.json
+tokens/
+recipients.csv
+send_log.csv
+suppressed.txt
+*.log
+.DS_Store

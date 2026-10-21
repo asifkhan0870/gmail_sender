@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MailDesk — Email Workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M3.5 6.5h17v12h-17z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m4 7 8 6 8-6" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></div>
+        <div><div class="brand-name">maildesk<span>.</span></div><div class="brand-caption">OUTREACH WORKSPACE</div></div>
+      </div>
+      <div class="workspace-label">WORKSPACE</div>
+      <button class="nav-item active"><span>▦</span> Campaign dashboard</button>
+      <button class="nav-item" onclick="document.querySelector('#composeCard').scrollIntoView({behavior:'smooth'})"><span>✎</span> Message composer</button>
+      <button class="nav-item" onclick="document.querySelector('#activityCard').scrollIntoView({behavior:'smooth'})"><span>◷</span> Activity & logs</button>
+      <div class="side-bottom">
+        <div class="help-card"><div class="help-dot">?</div><strong>Ready to reach out?</strong><p>Review every message before you send.</p></div>
+        <div class="profile"><div class="avatar">AK</div><div><strong>Mail operator</strong><small>Local workspace</small></div><span class="profile-menu">•••</span></div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div><div class="eyebrow">EMAIL OPERATIONS <span class="tiny-dot"></span> LOCAL WORKSPACE</div><h1>Campaign dashboard</h1><p class="subhead">Prepare thoughtful outreach, review your recipients, and track delivery.</p></div>
+        <div class="top-actions"><span class="status-pill"><span class="green-dot"></span><span id="apiStatus">Checking status</span></span><button class="icon-button" title="Refresh dashboard" onclick="refreshStats()">↻</button></div>
+      </header>
+      <section class="stats-grid">
+        <div class="stat-card"><div class="stat-top"><span>Total accepted</span><span class="stat-icon purple">↗</span></div><div class="stat-number" id="statSent">—</div><div class="stat-foot">Messages accepted by Gmail</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Sent today</span><span class="stat-icon blue">◷</span></div><div class="stat-number" id="statToday">—</div><div class="stat-foot">Local safety cap: <b id="dailyCap">100</b></div></div>
+        <div class="stat-card"><div class="stat-top"><span>Errors</span><span class="stat-icon orange">!</span></div><div class="stat-number" id="statErrors">—</div><div class="stat-foot">Check the log for details</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Unknown outcome</span><span class="stat-icon gray">?</span></div><div class="stat-number" id="statUnknown">—</div><div class="stat-foot">Review before retrying</div></div>
+      </section>
+      <div class="content-grid">
+        <section class="panel recipients-panel" id="recipientsCard">
+          <div class="panel-heading"><div><div class="section-kicker">STEP 01</div><h2>Import recipients</h2><p>Upload a CSV with an <code>email</code> column.</p></div><div class="step-number">01</div></div>
+          <label class="dropzone" id="dropzone" for="csvFile">
+            <input id="csvFile" type="file" accept=".csv,text/csv" hidden>
+            <div class="upload-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4.5 15.5v4h15v-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+            <strong id="fileTitle">Drop your CSV here</strong><span id="fileSub">or <u>browse files</u> from your computer</span><small>CSV only · Up to 5 MB</small>
+          </label>
+          <div class="field-note"><span class="checkmark">✓</span> Duplicate and suppressed addresses are filtered automatically.</div>
+          <div id="recipientStats" class="recipient-stats hidden">
+            <div><span>Eligible</span><strong id="eligibleCount">0</strong></div><div><span>Pending</span><strong id="pendingCount">0</strong></div><div><span>Duplicates</span><strong id="duplicateCount">0</strong></div><div><span>Invalid</span><strong id="invalidCount">0</strong></div>
+          </div>
+          <div id="recipientPreview" class="preview-list hidden"></div>
+          <button id="validateBtn" class="button secondary full" disabled>Validate CSV <span>→</span></button>
+        </section>
+        <section class="panel compose-panel" id="composeCard">
+          <div class="panel-heading"><div><div class="section-kicker">STEP 02</div><h2>Compose your message</h2><p>Write a clear, personal email.</p></div><div class="step-number">02</div></div>
+          <label class="input-label" for="senderEmail">Authorized Gmail account</label>
+          <div class="account-row"><select id="senderEmail" class="text-input"><option value="">Connect a Gmail account first</option></select><button id="connectBtn" class="button secondary" type="button">+ Connect account</button></div>
+          <div class="input-hint" id="accountHint">Connect each Google account once, then choose the sender from this list. Only Google-authorized test users can connect while your OAuth app is in Testing mode.</div>
+          <label class="input-label" for="subject">Subject line</label>
+          <input id="subject" class="text-input" maxlength="200" value="A personal introduction" placeholder="Write a subject">
+          <div class="input-label label-row"><label for="body">Email message</label><button class="text-button" id="restoreBtn" type="button">Restore example</button></div>
+          <textarea id="body" class="text-area" rows="9" maxlength="20000">Hello,
+
+I hope you're doing well.
+
+My name is Asif Khan, and I'm a Software Engineer currently campaigning for the position of President at my college.
+
+I'm reaching out to connect with fellow college students and college communities, exchange ideas, and build meaningful connections. I believe that student leadership is about listening, collaboration, and bringing people together to create positive change on campus.
+
+I'd be glad to connect with you, hear your perspectives, and learn about the initiatives and ideas that matter to students at your college.
+
+If you're interested, feel free to reply to this email. I'd be happy to continue the conversation personally.
+
+Best regards,
+Asif Khan
+M.Tech 2nd year GK0870
+Software Engineer</textarea>
+          <div class="field-note"><span class="checkmark">✓</span> Plain text format · Review names, claims and wording before sending.</div>
+          <div class="composer-actions"><button class="button secondary" id="previewBtn">Preview email <span>↗</span></button><button class="button primary" id="sendBtn" disabled>Review & send <span>→</span></button></div>
+          <div class="security-note"><span>♧</span> Sending stays disabled until enabled in local server settings.</div>
+        </section>
+      </div>
+      <section class="panel activity-panel" id="activityCard">
+        <div class="panel-heading activity-heading"><div><div class="section-kicker">ACTIVITY</div><h2>Recent activity</h2><p>Latest outcomes recorded by your sender.</p></div><button class="button small secondary" onclick="refreshStats()">Refresh ↻</button></div>
+        <div class="table-wrap"><table><thead><tr><th>RECIPIENT</th><th>STATUS</th><th>TIME</th><th>DETAIL</th></tr></thead><tbody id="activityRows"><tr><td colspan="4" class="empty-row">Loading activity…</td></tr></tbody></table></div>
+      </section>
+      <footer><span>MailDesk <b>•</b> Local-first email workspace</span><span>Use responsibly · Respect opt-outs</span></footer>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <dialog id="previewDialog" class="modal"><form method="dialog"><button class="modal-close" aria-label="Close">×</button></form><div class="section-kicker">MESSAGE PREVIEW</div><h2 id="previewSubject">A personal introduction</h2><div class="preview-meta">From <span id="previewFrom">your account</span><br>To <span id="previewTo">no recipients selected</span></div><pre id="previewBody"></pre><div class="modal-actions"><button class="button secondary" onclick="document.querySelector('#previewDialog').close()">Back to editor</button></div></dialog>
+  <dialog id="sendDialog" class="modal send-modal"><form method="dialog"><button class="modal-close" aria-label="Close">×</button></form><div class="section-kicker">FINAL REVIEW</div><h2>Ready to send?</h2><p class="modal-intro">Check the details below. Messages will be sent individually from your authorized Gmail account.</p><div class="review-summary"><div><span>Recipients</span><strong id="reviewRecipients">0</strong></div><div><span>From</span><strong id="reviewSender">—</strong></div><div><span>Subject</span><strong id="reviewSubject">—</strong></div></div>
+  <label class="consent-check"><input id="consentCheck" type="checkbox"><span>I confirm these recipients are appropriate to contact, the message is relevant, and any opt-outs will be respected.</span></label>
+  <label class="consent-check"><input id="confirmCheck" type="checkbox"><span>I have reviewed the message and want to start this send job.</span></label>
+  <div class="modal-actions"><button class="button secondary" onclick="document.querySelector('#sendDialog').close()">Cancel</button><button class="button primary" id="confirmSendBtn" disabled>Confirm send <span>→</span></button></div><div id="sendDialogNote" class="input-hint">Live sending is disabled by default on the backend.</div></dialog>
+  <script src="/static/app.js"></script>
+</body>
+</html>
